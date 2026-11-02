@@ -15,7 +15,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # COLE O LINK DO SEU BANNER AQUI
-BANNER_URL = "https://i.imgur.com/SEU_LINK_AQUI.png" # <--- TROCA ISSO
+BANNER_URL = "https://cdn.discordapp.com/attachments/1566216839619420223/1566748903334744144/IMG-20261011-WA1698.jpg?ex=6ae9ac1f&is=6ae85a9f&hm=af983794d59844d089970b3e920d07c43aa6685be22eb695a7f2b023d5dc1858&"
 
 class TicketSelect(discord.ui.Select):
     def __init__(self):
