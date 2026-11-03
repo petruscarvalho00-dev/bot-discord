@@ -1,71 +1,92 @@
-import os, threading, asyncio, discord
-from discord import app_commands
+import discord
 from discord.ext import commands
+import io, datetime, os
 from flask import Flask
+from threading import Thread
 
-app = Flask(__name__)
+# --- KEEP ALIVE PRA RENDER FICAR ON 24/7 ---
+app = Flask('')
+
 @app.route('/')
-def home(): return "ON"
-def run_web(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-threading.Thread(target=run_web, daemon=True).start()
+def home():
+    return "BOT HOLANDA ON 24/7 🇳🇱"
 
-TOKEN = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN")
+def run():
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+# --- BOT ---
 intents = discord.Intents.default()
-intents.members = True
 intents.message_content = True
+intents.messages = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-def get_cargo(guild):
-    for r in guild.roles:
-        if "Permissão Ticket" in r.name or "Permissão" in r.name:
-            return r
-    return None
+CONFIG_CATEGORIAS = {
+    "TRANSFERÊNCIA": None,
+    "DUVIDAS": None,
+    "BOOSTS": None,
+    "XFAC": None,
+    "DENUNCIA": None,
+    "ALIANÇA/PARCERIA": None,
+    "OUTROS": None,
+    "PAGAR META": None,
+    "SOLICITAR CARGO": None,
+    "SETAGEM": None,
+}
+ID_CANAL_LOGS = None
+
+async def criar_transcript(channel):
+    messages = [msg async for msg in channel.history(limit=500, oldest_first=True)]
+    transcript = f"Transcript {channel.name}\n\n"
+    for m in messages:
+        transcript += f"[{m.created_at.strftime('%d/%m %H:%M')}] {m.author}: {m.content}\n"
+    return transcript
 
 async def criar_ticket(interaction, motivo):
-    cargo = get_cargo(interaction.guild)
-    overw = {
-        interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_messages=True, attach_files=True),
-        interaction.guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
+    guild = interaction.guild
+    for c in guild.text_channels:
+        if f"-{interaction.user.name.lower()}" in c.name.lower() and c.overwrites_for(interaction.user).view_channel:
+            return await interaction.response.send_message(f"❌ Já tem ticket: {c.mention}", ephemeral=True)
+
+    cat_id = CONFIG_CATEGORIAS.get(motivo)
+    categoria = guild.get_channel(cat_id) if cat_id else None
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+        guild.me: discord.PermissionOverwrite(view_channel=True)
     }
-    if cargo:
-        overw[cargo] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_messages=True)
+    nome = f"{motivo.lower().replace('/','-').replace(' ','-')}-{interaction.user.name}"[:90]
+    canal = await guild.create_text_channel(name=nome.lower(), category=categoria, overwrites=overwrites, topic=str(interaction.user.id))
 
-    ch = await interaction.guild.create_text_channel(f"🎫・{motivo.lower()}-{interaction.user.name}", overwrites=overw)
-    
-    embed = discord.Embed(
-        title=f"🎫 Ticket - {motivo}",
-        description=f"Olá {interaction.user.mention}!\n\n**Motivo:** `{motivo}`\n**Atendimento:** {cargo.mention if cargo else 'Staff'}\n\nAguarde, alguém vai te atender!",
-        color=0x2B2D31
-    )
-    
-    class TicketInsideView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=None)
-        
-        @discord.ui.button(label="Atender", emoji="✅", style=discord.ButtonStyle.success)
-        async def atender(self, i: discord.Interaction, b: discord.ui.Button):
-            await i.response.send_message(f"✅ Ticket assumido por {i.user.mention}!", ephemeral=False)
-            await i.channel.edit(name=f"✅・{i.user.name}")
-            b.disabled = True
-            await i.message.edit(view=self)
+    class FecharView(discord.ui.View):
+        def __init__(self): super().__init__(timeout=None)
+        @discord.ui.button(label="Fechar Ticket", style=discord.ButtonStyle.red, emoji="🔒")
+        async def fechar(self, inter, btn):
+            await inter.response.defer()
+            txt = await criar_transcript(inter.channel)
+            file = discord.File(io.StringIO(txt), filename=f"transcript-{inter.channel.name}.txt")
+            if ID_CANAL_LOGS:
+                log_canal = guild.get_channel(ID_CANAL_LOGS)
+                if log_canal:
+                    embed = discord.Embed(title="🔒 Ticket Fechado", color=0xFF0000)
+                    embed.add_field(name="Canal", value=inter.channel.name)
+                    embed.add_field(name="Fechado por", value=f"{inter.user.mention}")
+                    await log_canal.send(embed=embed, file=file)
+            await inter.channel.delete()
 
-        @discord.ui.button(label="Fechar - Resolvido", emoji="🔒", style=discord.ButtonStyle.secondary)
-        async def resolvido(self, i: discord.Interaction, b: discord.ui.Button):
-            await i.response.send_message("🔒 Fechando como **RESOLVIDO** em 5s...")
-            await asyncio.sleep(5)
-            await i.channel.delete(reason="Resolvido")
+    embed_ticket = discord.Embed(title=f"🇳🇱 {motivo}", description=f"{interaction.user.mention} abriu", color=0xFF5500)
+    await canal.send(embed=embed_ticket, view=FecharView())
+    await interaction.response.send_message(f"✅ {canal.mention}", ephemeral=True)
 
-        @discord.ui.button(label="Fechar - Sem Resposta", emoji="⛔", style=discord.ButtonStyle.danger)
-        async def sem_resposta(self, i: discord.Interaction, b: discord.ui.Button):
-            await i.response.send_message("⛔ Fechando como **SEM RESPOSTA** em 5s...")
-            await asyncio.sleep(5)
-            await i.channel.delete(reason="Sem resposta")
+    if ID_CANAL_LOGS:
+        log_canal = guild.get_channel(ID_CANAL_LOGS)
+        if log_canal:
+            await log_canal.send(embed=discord.Embed(title="📩 Ticket Aberto", description=f"{interaction.user.mention} - {motivo} - {canal.mention}", color=0x00FF00))
 
-    await ch.send(content=f"{interaction.user.mention} {cargo.mention if cargo else ''}", embed=embed, view=TicketInsideView())
-    return ch
-
-class TropaView(discord.ui.View):
+class MenuHolanda(discord.ui.Select):
     def __init__(self):
-        super().__init__(timeout=None)
+        super().__init__(placeholder="
        
